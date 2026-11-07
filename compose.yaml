@@ -1,0 +1,51 @@
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql://auth:auth-local@db:5432/auth
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: auth-local
+      POSTGRES_DB: auth
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "auth", "-d", "auth"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  shell:
+    profiles: [tools]
+    build: .
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "auth_service.shell"]
+    stdin_open: true
+    tty: true
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgresql://auth:auth-local@db:5432/auth
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
