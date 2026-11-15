@@ -6,6 +6,10 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, Sec
 
 def validate_password(value: SecretStr) -> SecretStr:
     password = value.get_secret_value()
+    try:
+        password.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("Password must contain valid Unicode characters") from None
     if any(character in """@"'<>""" for character in password):
         raise ValueError("Password contains a forbidden character")
     if not (

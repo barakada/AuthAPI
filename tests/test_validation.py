@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,7 @@ from auth_service.config import Settings
 from main import app
 from auth_service.schemas import Credentials
 from auth_service.service import AuthService
+from auth_service.security import Passwords
 
 EMAIL = "Alice@example.com"
 PASSWORD = "Abcdef1!"
@@ -31,7 +33,7 @@ def auth_service():
         app.dependency_overrides.pop(get_auth_service, None)
 
 
-@pytest.mark.parametrize("password", [PASSWORD, PASSWORD + "a" * 16, "Éléphan٣★"])
+@pytest.mark.parametrize("password", [PASSWORD, PASSWORD + "a" * 16, "Éléphan٣★", PASSWORD + "🔐"])
 def test_valid_passwords(password):
     assert Credentials(email=EMAIL, password=password).password.get_secret_value() == password
 
@@ -44,6 +46,42 @@ def test_valid_passwords(password):
 def test_invalid_passwords(password):
     with pytest.raises(ValidationError):
         Credentials(email=EMAIL, password=password)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surrogate", ["\ud800", "\udfff"])
+@pytest.mark.parametrize("path,field", [
+    ("/auth/register", "password"),
+    ("/auth/login", "password"),
+    ("/auth/password/change", "current_password"),
+    ("/auth/password/change", "new_password"),
+])
+async def test_unpaired_surrogate_password_returns_422(auth_service, surrogate, path, field):
+    payload = {"email": EMAIL, "password": PASSWORD}
+    if path == "/auth/password/change":
+        payload = {"current_password": PASSWORD, "new_password": PASSWORD}
+    payload[field] = PASSWORD + surrogate
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + "A" * 43,
+    }
+    # ASCII JSON escapes reproduce malformed Unicode without client-side UTF-8 encoding.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(path, content=json.dumps(payload), headers=headers)
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", field]
+    assert PASSWORD not in response.text
+    auth_service.passwords.hash.assert_not_awaited()
+    auth_service.passwords.verify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("password", ["Éléphan٣★", PASSWORD + "🔐"])
+async def test_valid_unicode_password_can_be_hashed(password):
+    credentials = Credentials(email=EMAIL, password=password)
+    passwords = Passwords()
+    encoded = await passwords.hash(credentials.password.get_secret_value())
+    assert await passwords.verify(encoded, password)
 
 
 @pytest.mark.parametrize("url", [
