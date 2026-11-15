@@ -77,6 +77,16 @@ Successful authentication creates a random opaque token. The database stores its
 digest and UTC expiry. The client receives the token once and uses it as a bearer credential.
 SESSION_TTL_SECONDS defaults to 86400.
 
+The API starts a background cleanup task immediately and repeats it every 300 seconds.
+SESSION_CLEANUP_INTERVAL_SECONDS controls that interval. Expired sessions are removed for
+all users, including users who never log in again. SESSION_CLEANUP_BATCH_SIZE defaults
+to 1000 and limits each transaction. Full batches are drained before the task waits again.
+MySQL UTC time determines expiry. Row locking with SKIP LOCKED allows multiple API workers
+to clean separate batches. Database errors are logged and retried after the interval.
+An expires_at index is created on startup, including for existing session tables.
+During shutdown the task is cancelled and awaited before the database pool is disposed.
+Cleanup runs while an API process is running. After a restart it resumes with an immediate pass.
+
 Logout validates the token format, calculates its digest, and deletes the matching active
 AuthSession. Other sessions remain active. Reusing the revoked token returns 401.
 

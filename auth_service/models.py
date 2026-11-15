@@ -31,3 +31,6 @@ class AuthSession(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     # MySQL DATETIME stores a UTC value without a timezone offset.
     expires_at: Mapped[datetime] = mapped_column(DATETIME(fsp=6))
+
+
+session_expiry_index = Index("sessions_expiry", AuthSession.expires_at)

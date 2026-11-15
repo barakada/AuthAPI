@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from .config import Settings
-from .models import Base
+from .models import Base, session_expiry_index
 
 
 @asynccontextmanager
@@ -26,6 +26,8 @@ async def database(settings: Settings):
                 raise TimeoutError("Could not acquire schema initialization lock")
             try:
                 await connection.run_sync(Base.metadata.create_all)
+                # create_all does not add indexes to tables that already exist.
+                await connection.run_sync(session_expiry_index.create, checkfirst=True)
             finally:
                 await connection.scalar(select(func.release_lock("auth_service_schema")))
         yield async_sessionmaker(engine, expire_on_commit=False)

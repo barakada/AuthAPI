@@ -62,6 +62,23 @@ class AuthStore:
             )
             return result.rowcount == 1
 
+    async def delete_expired_sessions(self, batch_size: int) -> int:
+        async with self.sessions.begin() as session:
+            now = await session.scalar(select(func.utc_timestamp(6)))
+            digests = list(await session.scalars(
+                select(AuthSession.token_digest)
+                .where(AuthSession.expires_at <= now)
+                .order_by(AuthSession.expires_at, AuthSession.token_digest)
+                .limit(batch_size)
+                .with_for_update(skip_locked=True)
+            ))
+            if not digests:
+                return 0
+            result = await session.execute(
+                delete(AuthSession).where(AuthSession.token_digest.in_(digests))
+            )
+            return result.rowcount
+
     async def session_account(self, digest: bytes) -> User | None:
         async with self.sessions() as session:
             return await session.scalar(

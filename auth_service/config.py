@@ -7,6 +7,8 @@ class Settings(BaseSettings):
 
     database_url: MySQLDsn
     session_ttl_seconds: int = Field(default=86400, gt=0, le=2_147_483_647)
+    session_cleanup_interval_seconds: int = Field(default=300, gt=0, le=86400)
+    session_cleanup_batch_size: int = Field(default=1000, ge=1, le=10000)
 
     @field_validator("database_url")
     @classmethod

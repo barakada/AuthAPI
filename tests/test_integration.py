@@ -6,7 +6,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, func, select, update
+from sqlalchemy import event, func, inspect, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
@@ -14,6 +14,10 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from main import app
 from auth_service.models import AuthSession, User
 from auth_service.security import token_digest
+from auth_service.config import Settings
+from auth_service.db import database
+from auth_service.models import session_expiry_index
+from auth_service.repository import AuthStore
 
 EMAIL = "Alice@example.com"
 PASSWORD = "Abcdef1!"
@@ -53,6 +57,7 @@ async def client(database_url):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as session:
             yield session
     assert closed, "Application shutdown should close its pooled MySQL connections"
+    assert app.state.cleanup_task.cancelled()
 
 
 async def register(client, email=EMAIL):
@@ -148,6 +153,41 @@ async def test_mysql_email_comparison_preserves_distinct_accents(client):
     assert (await register(client, "jose@example.com")).status_code == 201
     assert (await register(client, "josé@example.com")).status_code == 201
     assert (await register(client, "JOSÉ@example.com")).status_code == 409
+
+
+async def test_cleanup_removes_expired_sessions_for_inactive_users_in_batches(client):
+    expired = []
+    for email in ("inactive@example.com", "other@example.com"):
+        await register(client, email)
+        for _ in range(2):
+            expired.append((await login(client, email=email)).json()["access_token"])
+    active = (await login(client, email="other@example.com")).json()["access_token"]
+    async with app.state.sessions.begin() as session:
+        await session.execute(
+            update(AuthSession)
+            .where(AuthSession.token_digest.in_([token_digest(token) for token in expired]))
+            .values(expires_at=func.utc_timestamp(6))
+        )
+    store = app.state.auth_service.store
+    assert await store.delete_expired_sessions(3) == 3
+    assert await store.delete_expired_sessions(3) == 1
+    assert await store.delete_expired_sessions(3) == 0
+    async with app.state.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(AuthSession)) == 1
+    assert (await client.post("/auth/logout", headers=authorization(expired[0]))).status_code == 401
+    assert (await client.post("/auth/logout", headers=authorization(active))).status_code == 204
+
+
+async def test_startup_adds_expiry_index_to_existing_table(database_url):
+    async with database(Settings()) as sessions:
+        await AuthStore(sessions).register(EMAIL, "existing-password-hash")
+        async with sessions.kw["bind"].begin() as connection:
+            await connection.run_sync(session_expiry_index.drop)
+    async with database(Settings()) as sessions:
+        async with sessions.kw["bind"].connect() as connection:
+            indexes = await connection.run_sync(lambda conn: inspect(conn).get_indexes("sessions"))
+        assert "sessions_expiry" in {index["name"] for index in indexes}
+        assert await AuthStore(sessions).login_account(EMAIL) is not None
 
 
 async def test_password_change_rolls_back_if_session_revocation_fails(client):
