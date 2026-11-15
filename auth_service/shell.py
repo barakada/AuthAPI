@@ -4,7 +4,9 @@ import uvloop
 from IPython import start_ipython
 from traitlets.config import Config
 
-from .db import AuthStore, Settings, database
+from .config import Settings
+from .db import database
+from .repository import AuthStore
 
 
 def main() -> None:
@@ -15,14 +17,14 @@ def main() -> None:
         def run_cell(coroutine):
             return runner.run(coroutine)
 
-        pool = runner.run(lifecycle.__aenter__())
+        sessions = runner.run(lifecycle.__aenter__())
         try:
             config = Config()
             config.InteractiveShell.autoawait = True
             config.InteractiveShell.loop_runner = run_cell
             start_ipython(
                 config=config,
-                user_ns={"db": pool, "store": AuthStore(pool), "settings": settings},
+                user_ns={"sessions": sessions, "store": AuthStore(sessions), "settings": settings},
             )
         finally:
             runner.run(lifecycle.__aexit__(None, None, None))

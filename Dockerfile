@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements-test.txt
 COPY auth_service ./auth_service
 COPY tests ./tests
 COPY pytest.ini .
+COPY main.py .
 CMD ["python", "-m", "pytest", "-q"]
 
 FROM base AS runtime

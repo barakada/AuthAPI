@@ -1,16 +1,34 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import asyncpg
 import httpx
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.exc import OperationalError
 
-from auth_service.main import app
+from auth_service.dependencies import get_auth_service
+from auth_service.config import Settings
+from main import app
 from auth_service.schemas import Credentials
+from auth_service.service import AuthService
 
 EMAIL = "Alice@example.com"
 PASSWORD = "Abcdef1!"
+
+
+@pytest.fixture(autouse=True)
+def auth_service():
+    store = SimpleNamespace(login_account=AsyncMock())
+    service = AuthService(store, AsyncMock(), "dummy-hash", 86400)
+
+    async def override_service():
+        return service
+
+    app.dependency_overrides[get_auth_service] = override_service
+    try:
+        yield service
+    finally:
+        app.dependency_overrides.pop(get_auth_service, None)
 
 
 @pytest.mark.parametrize("password", [PASSWORD, PASSWORD + "a" * 16, "Éléphan٣★"])
@@ -26,6 +44,16 @@ def test_valid_passwords(password):
 def test_invalid_passwords(password):
     with pytest.raises(ValidationError):
         Credentials(email=EMAIL, password=password)
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql://user:password@localhost/auth",
+    "mysql://user:password@localhost/auth",
+    "mysql+aiomysql://user:password@localhost",
+])
+def test_settings_require_async_mysql_with_database(url):
+    with pytest.raises(ValidationError):
+        Settings(database_url=url, _env_file=None)
 
 
 @pytest.mark.asyncio
@@ -59,12 +87,14 @@ async def test_logout_rejects_missing_or_malformed_bearer_token(authorization):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [asyncpg.ConnectionDoesNotExistError, TimeoutError])
-async def test_awaited_database_error_returns_generic_503(monkeypatch, error):
-    store = SimpleNamespace(login_account=AsyncMock(side_effect=error("private connection details")))
-    monkeypatch.setattr(app.state, "store", store, raising=False)
+@pytest.mark.parametrize("error", [
+    OperationalError("query", {}, OSError("private connection details")),
+    TimeoutError("private connection details"),
+])
+async def test_awaited_database_error_returns_generic_503(auth_service, error):
+    auth_service.store.login_account.side_effect = error
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/auth/login", json={"email": EMAIL, "password": PASSWORD})
-    store.login_account.assert_awaited_once_with(EMAIL)
+    auth_service.store.login_account.assert_awaited_once_with(EMAIL)
     assert response.status_code == 503
     assert "private connection details" not in response.text

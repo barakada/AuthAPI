@@ -1,24 +1,24 @@
-x-app-environment: &app-environment
-  DATABASE_URL: postgresql://auth:auth-local@db:5432/auth
-
 services:
   db:
-    image: postgres:17
+    image: mysql:8.4
     environment:
-      POSTGRES_USER: auth
-      POSTGRES_PASSWORD: auth-local
-      POSTGRES_DB: auth
+      MYSQL_DATABASE: auth
+      MYSQL_USER: auth
+      MYSQL_PASSWORD: auth-local
+      MYSQL_ROOT_PASSWORD: root-local
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "auth", "-d", "auth"]
-      interval: 2s
-      timeout: 3s
-      retries: 15
+      test: ["CMD-SHELL", "mysql --protocol=TCP -h 127.0.0.1 -uauth -p$$MYSQL_PASSWORD auth -e 'SELECT 1'"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - mysql-data:/var/lib/mysql
 
   api:
     build: .
-    environment: *app-environment
+    environment:
+      DATABASE_URL: mysql+aiomysql://auth:auth-local@db:3306/auth
     depends_on:
       db:
         condition: service_healthy
@@ -28,7 +28,8 @@ services:
   shell:
     profiles: [tools]
     build: .
-    environment: *app-environment
+    environment:
+      DATABASE_URL: mysql+aiomysql://auth:auth-local@db:3306/auth
     depends_on:
       db:
         condition: service_healthy
@@ -36,16 +37,29 @@ services:
     stdin_open: true
     tty: true
 
+  test-db:
+    profiles: [test]
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: test-local
+      MYSQL_ROOT_HOST: "%"
+    healthcheck:
+      test: ["CMD-SHELL", "mysql --protocol=TCP -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD -e 'SELECT 1'"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
   tests:
     profiles: [test]
     build:
       context: .
       target: test
     environment:
-      TEST_DATABASE_URL: postgresql://auth:auth-local@db:5432/auth
+      TEST_DATABASE_URL: mysql+aiomysql://root:test-local@test-db:3306/mysql
     depends_on:
-      db:
+      test-db:
         condition: service_healthy
 
 volumes:
-  db-data:
+  mysql-data:

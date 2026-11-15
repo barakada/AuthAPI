@@ -22,8 +22,8 @@ flowchart LR
     user -->|"Manages their account through"| client
     subgraph auth["Authentication service · system boundary"]
         api["Authentication API<br/>[Container · FastAPI / Uvicorn / uvloop]<br/>Validates requests, verifies passwords, and manages sessions"]
-        db[("Authentication database<br/>[Container · PostgreSQL]<br/>Stores users, password hashes, and expiring session digests")]
-        api -->|"Reads and writes account and session records<br/>PostgreSQL protocol via asyncpg"| db
+        db[("Authentication database<br/>[Container · MySQL]<br/>Stores users, password hashes, and expiring session digests")]
+        api -->|"Reads and writes account and session records<br/>MySQL protocol via SQLAlchemy / aiomysql"| db
     end
     client -->|"Calls registration, login, logout, and password change<br/>HTTPS / JSON with bearer authentication"| api
 ```
@@ -32,8 +32,8 @@ Each box names its C4 element type. Arrows point from the caller to the system o
 
 ## Decisions behind the model
 
-- PostgreSQL holds users and sessions so password updates and session revocation can commit in one transaction. Database constraints enforce email uniqueness.
-- Login creates a 24-hour opaque bearer session by default. PostgreSQL stores its SHA-256 digest. Logout revokes the presented session. Password change verifies the current password and revokes every session for the account.
-- The API and the Docker IPython shell share the same asynchronous database lifecycle. The shell is an alternate entry point in the API image and runs a persistent uvloop so pooled connections can be reused across commands.
+- MySQL holds users and sessions so password updates and session revocation can commit in one transaction. Database constraints enforce email uniqueness.
+- Login creates a 24-hour opaque bearer session by default. MySQL stores its SHA-256 digest. Logout revokes the presented session. Password change verifies the current password and revokes every session for the account.
+- The API and the Docker IPython shell share the same asynchronous database lifecycle. The shell is an alternate entry point in the API image and runs a persistent uvloop so SQLAlchemy pooled connections can be reused across commands.
 
 [C4 system context](https://c4model.com/diagrams/system-context) · [C4 containers](https://c4model.com/diagrams/container)
